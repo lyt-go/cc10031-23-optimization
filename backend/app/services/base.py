@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -116,6 +117,47 @@ class BaseModuleService:
                 f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
                 written += 1
         return written
+
+    def _overwrite_jsonl(self, filepath: Path, records: list[dict[str, Any]]) -> int:
+        """原子覆盖写 JSONL：先写临时文件再 rename，保证读者要么看到完整旧版、要么看到完整新版。"""
+        _ensure_dir(filepath.parent)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{filepath.name}.", suffix=".tmp", dir=str(filepath.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                for rec in records:
+                    f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_name, filepath)
+        except BaseException:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+            raise
+        return len(records)
+
+    def _overwrite_json(self, filepath: Path, payload: dict[str, Any]) -> Path:
+        """原子覆盖写 JSON 清单文件，避免读者读到写了一半的清单。"""
+        _ensure_dir(filepath.parent)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{filepath.name}.", suffix=".tmp", dir=str(filepath.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_name, filepath)
+        except BaseException:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+            raise
+        return filepath
+
+    @staticmethod
+    def _canonical_checksum(records: list[dict[str, Any]]) -> str:
+        """对记录内容做规范化 sha256，用作轮次清单里的来源校验值。"""
+        content = json.dumps(records, ensure_ascii=False, sort_keys=True, default=str)
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     def _read_jsonl(self, filepath: Path) -> list[dict[str, Any]]:
         """从 JSONL 文件逐行读取记录列表，用于跨模块共享数据产物。"""

@@ -77,5 +77,20 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 累计归并与序列导出的一致性
+
+- 归并结果以**不可变轮次**发布到 `data/rollup_windows/rounds/<窗口编号>/`，每轮含
+  窗口数据、累计序列和轮次清单（窗口范围、实际来源文件、内容校验值、更正父轮与
+  首个变化窗口 `changed_from`）。当前文件用临时文件 + 原子 rename 覆盖，更正中途
+  不会出现半新半旧的窗口文件。
+- 导出走"受理 → 领取"：`SeriesExportService.accept_export_request` 先只发领取号，
+  `claim_export_shard` 首次领取时在轮次锁内原子绑定当前最新完整轮，同一领取号的
+  全部分片永远来自同一轮；旧领取号续领仍读绑定的旧轮，旧合计可复算。
+- 每个分片自带轮次号、窗口范围、来源与校验值，`verify_claim` 按清单重算累计并
+  逐分片核对，`stale` 仅提示存在更新轮（旧轮不可变、分片仍适用）。
+- 窗口更正（`correct_rollup_window`）与更正重送（`republish_correction`）只从
+  `changed_from` 起补算受影响后缀，前缀窗口原样保留。场景测试见
+  `backend/tests/test_rollup_export_consistency.py`。
+
 领域：数据工程
 子方向：数据采集、爬虫与RPA
